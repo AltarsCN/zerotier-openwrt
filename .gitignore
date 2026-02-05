@@ -1,0 +1,25 @@
+# Build artifacts
+*.ipk
+*.ko
+*.o
+*.a
+
+# SDK/ImageBuilder
+sdk/
+imagebuilder/
+*.tar.xz
+*.tar.gz
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

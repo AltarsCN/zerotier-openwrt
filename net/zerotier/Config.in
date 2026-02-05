@@ -1,0 +1,29 @@
+menu "Configuration"
+	depends on PACKAGE_zerotier
+
+config ZEROTIER_ENABLE_CONTROLLER
+	bool "Enable built-in network controller"
+	depends on PACKAGE_zerotier
+	default y
+	help
+	  Enable the built-in ZeroTier network controller.
+	  This allows you to create and manage your own ZeroTier networks
+	  directly from this device without using ZeroTier Central.
+	  
+	  Note: This increases binary size by approximately 1-2 MB.
+
+config ZEROTIER_ENABLE_DEBUG
+	bool "Build in debug mode"
+	depends on PACKAGE_zerotier
+	default n
+	help
+	  Build ZeroTier with debug symbols and extra logging.
+
+config ZEROTIER_ENABLE_SELFTEST
+	bool "Build self-test program"
+	depends on PACKAGE_zerotier
+	default n
+	help
+	  Build the zerotier-selftest diagnostic program.
+
+endmenu
