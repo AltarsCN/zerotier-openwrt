@@ -1,6 +1,9 @@
 name: Build ZeroTier with Controller
 
 on:
+  schedule:
+    # 每天 UTC 时间 2:00 (北京时间 10:00)
+    - cron: '0 2 * * *'
   push:
     branches: [main, master]
     tags:
@@ -27,25 +30,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # x86_64 - 软路由/虚拟机
           - arch: x86_64
             sdk_url: https://downloads.immortalwrt.org/snapshots/targets/x86/64/
             sdk_pattern: immortalwrt-sdk-x86-64
             platform: ImmortalWrt
-          
-          # aarch64 - 通用 ARM64
           - arch: aarch64_cortex-a53
             sdk_url: https://downloads.immortalwrt.org/snapshots/targets/rockchip/armv8/
             sdk_pattern: immortalwrt-sdk-rockchip-armv8
             platform: ImmortalWrt
-          
-          # QCA IPQ60xx - 京东云AX1800/AX6000等
           - arch: qualcommax_ipq60xx
             sdk_url: https://downloads.immortalwrt.org/snapshots/targets/qualcommax/ipq60xx/
             sdk_pattern: immortalwrt-sdk-qualcommax-ipq60xx
             platform: ImmortalWrt
-          
-          # QCA IPQ807x - 红米AX6等高端设备
           - arch: qualcommax_ipq807x
             sdk_url: https://downloads.immortalwrt.org/snapshots/targets/qualcommax/ipq807x/
             sdk_pattern: immortalwrt-sdk-qualcommax-ipq807x
@@ -77,39 +73,28 @@ jobs:
         if: steps.check.outputs.should_build == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison g++ gawk \
-            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
-            python3-setuptools rsync unzip zlib1g-dev file wget zstd
+          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-setuptools rsync unzip zlib1g-dev file wget zstd
 
       - name: Download SDK
         if: steps.check.outputs.should_build == 'true'
         run: |
           echo "Downloading SDK for ${{ matrix.arch }} from ${{ matrix.sdk_url }}"
-          
-          # Find SDK filename (try .tar.zst first, then .tar.xz)
           SDK_FILE=$(curl -sL "${{ matrix.sdk_url }}" | grep -oE '${{ matrix.sdk_pattern }}[^"]+\.tar\.zst' | head -1)
           if [ -z "$SDK_FILE" ]; then
             SDK_FILE=$(curl -sL "${{ matrix.sdk_url }}" | grep -oE '${{ matrix.sdk_pattern }}[^"]+\.tar\.xz' | head -1)
           fi
-          
           echo "Found SDK: $SDK_FILE"
-          
           if [ -z "$SDK_FILE" ]; then
             echo "ERROR: Could not find SDK for ${{ matrix.arch }}"
             exit 1
           fi
-          
-          # Download
           wget -q --show-progress "${{ matrix.sdk_url }}${SDK_FILE}" -O sdk_archive
-          
-          # Extract based on extension
           if [[ "$SDK_FILE" == *.zst ]]; then
             zstd -d sdk_archive -o sdk.tar
             tar xf sdk.tar
           else
             tar xf sdk_archive
           fi
-          
           mv immortalwrt-sdk-* sdk
           ls -la sdk/
 
@@ -117,48 +102,58 @@ jobs:
         if: steps.check.outputs.should_build == 'true'
         working-directory: sdk
         run: |
-          # Update feeds first
           ./scripts/feeds update packages
-          
-          # Patch the official zerotier Makefile to add controller option
           ZEROTIER_DIR="feeds/packages/net/zerotier"
           
-          # Add ZEROTIER_ENABLE_CONTROLLER to Config.in if not already present
+          # Patch Config.in using awk
           if ! grep -q "ZEROTIER_ENABLE_CONTROLLER" "$ZEROTIER_DIR/Config.in"; then
-            cat >> "$ZEROTIER_DIR/Config.in" << 'CONFIGEOF'
-
-config ZEROTIER_ENABLE_CONTROLLER
-	bool "Enable built-in network controller"
-	depends on PACKAGE_zerotier
-	default y
-	help
-	  Enable the built-in ZeroTier network controller.
-	  This allows creating and managing ZeroTier networks locally.
-CONFIGEOF
+            awk '
+            /^endmenu/ {
+              print "config ZEROTIER_ENABLE_CONTROLLER"
+              print "\tbool \"Enable built-in network controller\""
+              print "\tdepends on PACKAGE_zerotier"
+              print "\tdefault y"
+              print "\thelp"
+              print "\t  Enable the built-in ZeroTier network controller."
+              print "\t  This allows creating and managing ZeroTier networks locally."
+              print ""
+            }
+            {print}
+            ' "$ZEROTIER_DIR/Config.in" > "$ZEROTIER_DIR/Config.in.new"
+            mv "$ZEROTIER_DIR/Config.in.new" "$ZEROTIER_DIR/Config.in"
+            echo "Patched Config.in"
           fi
           
-          # Patch Makefile to use ZT_CONTROLLER when enabled
+          # Patch Makefile using awk
           if ! grep -q "ZT_CONTROLLER=1" "$ZEROTIER_DIR/Makefile"; then
-            sed -i '/^MAKE_FLAGS.*ZT_EMBEDDED/a \\nifeq ($(CONFIG_ZEROTIER_ENABLE_CONTROLLER),y)\nMAKE_FLAGS += ZT_CONTROLLER=1\nendif' "$ZEROTIER_DIR/Makefile"
+            awk '
+            /^define Build\/Compile/ {
+              print "# Enable built-in network controller"
+              print "ifeq ($(CONFIG_ZEROTIER_ENABLE_CONTROLLER),y)"
+              print "MAKE_FLAGS += ZT_CONTROLLER=1"
+              print "endif"
+              print ""
+            }
+            {print}
+            ' "$ZEROTIER_DIR/Makefile" > "$ZEROTIER_DIR/Makefile.new"
+            mv "$ZEROTIER_DIR/Makefile.new" "$ZEROTIER_DIR/Makefile"
+            echo "Patched Makefile"
           fi
           
-          # Show the patched files
           echo "=== Patched Config.in ==="
-          tail -20 "$ZEROTIER_DIR/Config.in"
+          tail -15 "$ZEROTIER_DIR/Config.in"
           echo "=== Patched Makefile (ZT_CONTROLLER section) ==="
-          grep -A3 "ZT_CONTROLLER" "$ZEROTIER_DIR/Makefile" || true
+          grep -B2 -A5 "ZT_CONTROLLER" "$ZEROTIER_DIR/Makefile" || true
 
       - name: Configure build
         if: steps.check.outputs.should_build == 'true'
         working-directory: sdk
         run: |
           ./scripts/feeds install zerotier
-          
           cat > .config << 'EOF'
           CONFIG_PACKAGE_zerotier=y
           CONFIG_ZEROTIER_ENABLE_CONTROLLER=y
           EOF
-          
           make defconfig
           echo "=== ZeroTier config ==="
           grep -i zerotier .config
@@ -168,8 +163,7 @@ CONFIGEOF
         working-directory: sdk
         run: |
           echo "Building zerotier with controller for ${{ matrix.arch }}..."
-          make package/feeds/packages/zerotier/compile V=s -j$(nproc) 2>&1 | tee build.log || \
-          make package/feeds/packages/zerotier/compile V=s -j1 2>&1 | tee -a build.log
+          make package/feeds/packages/zerotier/compile V=s -j$(nproc) 2>&1 | tee build.log || make package/feeds/packages/zerotier/compile V=s -j1 2>&1 | tee -a build.log
 
       - name: Collect artifacts
         if: steps.check.outputs.should_build == 'true'
@@ -177,15 +171,12 @@ CONFIGEOF
           mkdir -p artifacts
           find sdk/bin -name "zerotier*.ipk" -exec cp {} artifacts/ \; 2>/dev/null || true
           find sdk/bin -name "zerotier*.apk" -exec cp {} artifacts/ \; 2>/dev/null || true
-          
-          # Rename with arch suffix for clarity
           for f in artifacts/*; do
             if [ -f "$f" ]; then
               newname=$(echo "$f" | sed "s/\.ipk/_${{ matrix.arch }}.ipk/; s/\.apk/_${{ matrix.arch }}.apk/")
               mv "$f" "$newname" 2>/dev/null || true
             fi
           done
-          
           ls -la artifacts/ || echo "No artifacts found"
 
       - name: Upload artifacts
@@ -239,7 +230,6 @@ CONFIGEOF
             
             ### Installation
             ```bash
-            # 下载对应架构的 ipk/apk 文件后
             opkg install zerotier_*.ipk
             # 或
             apk add zerotier_*.apk
