@@ -4,6 +4,31 @@ This is a custom OpenWrt package feed for ZeroTier with built-in network control
 
 The official OpenWrt/ImmortalWrt zerotier package does not include controller support by default. This feed provides a replacement package with the controller enabled.
 
+## Pre-built Packages
+
+Pre-built packages are available in [GitHub Releases](https://github.com/AltarsCN/zerotier-openwrt/releases).
+
+### Supported Architectures
+
+| Architecture | Platform | Devices |
+|-------------|----------|---------|
+| `x86_64` | ImmortalWrt | 软路由、虚拟机 |
+| `aarch64_cortex-a53` | ImmortalWrt | Rockchip ARM64 设备 (R2S/R4S/R5S 等) |
+| `qualcommax_ipq60xx` | ImmortalWrt | 京东云 AX1800/AX6000、GL-AX1800 等 |
+| `qualcommax_ipq807x` | ImmortalWrt | 红米 AX6、Netgear RAX120 等 |
+
+### Quick Install
+
+```bash
+# 下载对应架构的包
+wget https://github.com/AltarsCN/zerotier-openwrt/releases/latest/download/zerotier_xxx_x86_64.ipk
+
+# 安装
+opkg install zerotier_*.ipk
+# 或 (ImmortalWrt 24.10+)
+apk add zerotier_*.apk
+```
+
 ## Features
 
 - **Built-in Network Controller**: Create and manage your own ZeroTier networks locally
