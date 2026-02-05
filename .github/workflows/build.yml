@@ -114,10 +114,10 @@ jobs:
           ./scripts/feeds update packages
           ./scripts/feeds install libminiupnpc libnatpmp
           
-          cat > .config << 'EOF'
-          CONFIG_PACKAGE_zerotier=y
-          CONFIG_ZEROTIER_ENABLE_CONTROLLER=y
-          EOF
+          # 生成配置（避免 heredoc 缩进问题）
+          echo "CONFIG_PACKAGE_zerotier=y" > .config
+          echo "CONFIG_ZEROTIER_ENABLE_CONTROLLER=y" >> .config
+          
           make defconfig
           echo "=== ZeroTier config ==="
           grep -i zerotier .config
