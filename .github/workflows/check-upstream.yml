@@ -1,0 +1,84 @@
+name: Check Upstream ZeroTier
+
+on:
+  schedule:
+    # 每周一 UTC 2:00 检查一次
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+jobs:
+  check-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get current version
+        id: current
+        run: |
+          CURRENT_VERSION=$(grep -oP 'PKG_VERSION:=\K[0-9.]+' net/zerotier/Makefile)
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "当前版本: $CURRENT_VERSION"
+
+      - name: Get latest upstream version
+        id: upstream
+        run: |
+          LATEST=$(curl -sL https://api.github.com/repos/zerotier/ZeroTierOne/releases/latest | jq -r '.tag_name')
+          echo "version=$LATEST" >> $GITHUB_OUTPUT
+          echo "上游最新版本: $LATEST"
+
+      - name: Compare versions
+        id: compare
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          LATEST="${{ steps.upstream.outputs.version }}"
+          
+          if [ "$CURRENT" != "$LATEST" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "发现新版本: $CURRENT -> $LATEST"
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "已是最新版本"
+          fi
+
+      - name: Update Makefile
+        if: steps.compare.outputs.needs_update == 'true'
+        run: |
+          NEW_VERSION="${{ steps.upstream.outputs.version }}"
+          
+          # 下载新版本计算 hash
+          wget -q "https://codeload.github.com/zerotier/ZeroTierOne/tar.gz/${NEW_VERSION}" -O zerotier.tar.gz
+          NEW_HASH=$(sha256sum zerotier.tar.gz | cut -d' ' -f1)
+          rm zerotier.tar.gz
+          
+          echo "新版本 hash: $NEW_HASH"
+          
+          # 更新 Makefile
+          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${NEW_VERSION}/" net/zerotier/Makefile
+          sed -i "s/PKG_HASH:=.*/PKG_HASH:=${NEW_HASH}/" net/zerotier/Makefile
+          
+          # 重置 PKG_RELEASE
+          sed -i "s/PKG_RELEASE:=.*/PKG_RELEASE:=1/" net/zerotier/Makefile
+          
+          echo "=== 更新后的 Makefile ==="
+          head -20 net/zerotier/Makefile
+
+      - name: Commit and push
+        if: steps.compare.outputs.needs_update == 'true'
+        run: |
+          NEW_VERSION="${{ steps.upstream.outputs.version }}"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add net/zerotier/Makefile
+          git commit -m "feat: update zerotier to ${NEW_VERSION}"
+          git push
+          
+          # 创建新 tag 触发 release
+          git tag -a "v${NEW_VERSION}" -m "ZeroTier ${NEW_VERSION} with built-in controller"
+          git push origin "v${NEW_VERSION}"
+          
+          echo "已推送更新并创建 tag v${NEW_VERSION}"

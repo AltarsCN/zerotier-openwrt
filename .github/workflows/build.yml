@@ -1,9 +1,6 @@
 name: Build ZeroTier with Controller
 
 on:
-  schedule:
-    # 每天 UTC 时间 2:00 (北京时间 10:00)
-    - cron: '0 2 * * *'
   push:
     branches: [main, master]
     tags:
