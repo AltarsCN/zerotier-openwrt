@@ -95,27 +95,35 @@ jobs:
           mv immortalwrt-sdk-* sdk
           ls -la sdk/
 
-      - name: Setup zerotier package
+      - name: Configure feeds and package
         if: steps.check.outputs.should_build == 'true'
+        working-directory: sdk
         run: |
+          # 更新 feeds 获取依赖，但不安装 zerotier（避免覆盖我们的版本）
+          ./scripts/feeds update packages
+          ./scripts/feeds install libminiupnpc libnatpmp
+          
+          # 删除 feeds 中的 zerotier 包（如果存在）
+          rm -rf feeds/packages/net/zerotier 2>/dev/null || true
+          rm -rf package/feeds/packages/zerotier 2>/dev/null || true
+          
           # 使用本仓库的 zerotier 包（已含控制器支持）
-          cp -r net/zerotier sdk/package/
+          cp -r ../net/zerotier package/
           echo "=== 使用本地 zerotier 包 ==="
-          head -30 sdk/package/zerotier/Makefile
+          head -30 package/zerotier/Makefile
 
       - name: Configure build
         if: steps.check.outputs.should_build == 'true'
         working-directory: sdk
         run: |
-          # 更新 feeds 获取依赖 (libminiupnpc, libnatpmp 等)
-          ./scripts/feeds update packages
-          ./scripts/feeds install libminiupnpc libnatpmp
-          
-          # 生成配置（避免 heredoc 缩进问题）
+          # 生成配置 - 必须在 defconfig 之后再追加子选项
           echo "CONFIG_PACKAGE_zerotier=y" > .config
-          echo "CONFIG_ZEROTIER_ENABLE_CONTROLLER=y" >> .config
-          
           make defconfig
+          
+          # defconfig 后追加控制器选项
+          sed -i 's/# CONFIG_ZEROTIER_ENABLE_CONTROLLER is not set/CONFIG_ZEROTIER_ENABLE_CONTROLLER=y/' .config
+          grep -q "CONFIG_ZEROTIER_ENABLE_CONTROLLER=y" .config || echo "CONFIG_ZEROTIER_ENABLE_CONTROLLER=y" >> .config
+          
           echo "=== ZeroTier config ==="
           grep -i zerotier .config
 
@@ -124,20 +132,41 @@ jobs:
         working-directory: sdk
         run: |
           echo "Building zerotier with controller for ${{ matrix.arch }}..."
-          make package/zerotier/compile V=s -j$(nproc) 2>&1 | tee build.log || make package/zerotier/compile V=s -j1 2>&1 | tee -a build.log
+          make package/zerotier/compile V=s -j$(nproc) 2>&1 | tee build.log
+          BUILD_RESULT=$?
+          if [ $BUILD_RESULT -ne 0 ]; then
+            echo "=== Build failed, retrying with single thread ==="
+            make package/zerotier/compile V=s -j1 2>&1 | tee -a build.log
+          fi
+          echo "=== Searching for built packages ==="
+          find bin/ -type f \( -name "*.ipk" -o -name "*.apk" \) 2>/dev/null | head -20
 
       - name: Collect artifacts
         if: steps.check.outputs.should_build == 'true'
         run: |
           mkdir -p artifacts
+          echo "=== Searching all package files ==="
+          find sdk/bin -type f \( -name "*.ipk" -o -name "*.apk" \) 2>/dev/null
+          
           find sdk/bin -name "zerotier*.ipk" -exec cp {} artifacts/ \; 2>/dev/null || true
           find sdk/bin -name "zerotier*.apk" -exec cp {} artifacts/ \; 2>/dev/null || true
+          
+          # 重命名添加架构标识
           for f in artifacts/*; do
             if [ -f "$f" ]; then
-              newname=$(echo "$f" | sed "s/\.ipk/_${{ matrix.arch }}.ipk/; s/\.apk/_${{ matrix.arch }}.apk/")
-              mv "$f" "$newname" 2>/dev/null || true
+              base=$(basename "$f")
+              if [[ "$base" == *.ipk ]]; then
+                newname="${base%.ipk}_${{ matrix.arch }}.ipk"
+              elif [[ "$base" == *.apk ]]; then
+                newname="${base%.apk}_${{ matrix.arch }}.apk"
+              else
+                continue
+              fi
+              mv "$f" "artifacts/$newname" 2>/dev/null || true
             fi
           done
+          
+          echo "=== Artifacts collected ==="
           ls -la artifacts/ || echo "No artifacts found"
 
       - name: Upload artifacts
@@ -148,12 +177,13 @@ jobs:
           path: artifacts/
           if-no-files-found: warn
 
-      - name: Upload build log on failure
-        if: failure() && steps.check.outputs.should_build == 'true'
+      - name: Upload build log
+        if: always() && steps.check.outputs.should_build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: build-log-${{ matrix.arch }}
           path: sdk/build.log
+          if-no-files-found: ignore
 
   release:
     needs: build
