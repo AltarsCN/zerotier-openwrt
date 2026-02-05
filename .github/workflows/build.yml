@@ -98,58 +98,22 @@ jobs:
           mv immortalwrt-sdk-* sdk
           ls -la sdk/
 
-      - name: Patch official zerotier to enable controller
+      - name: Setup zerotier package
         if: steps.check.outputs.should_build == 'true'
-        working-directory: sdk
         run: |
-          ./scripts/feeds update packages
-          ZEROTIER_DIR="feeds/packages/net/zerotier"
-          
-          # Patch Config.in using awk
-          if ! grep -q "ZEROTIER_ENABLE_CONTROLLER" "$ZEROTIER_DIR/Config.in"; then
-            awk '
-            /^endmenu/ {
-              print "config ZEROTIER_ENABLE_CONTROLLER"
-              print "\tbool \"Enable built-in network controller\""
-              print "\tdepends on PACKAGE_zerotier"
-              print "\tdefault y"
-              print "\thelp"
-              print "\t  Enable the built-in ZeroTier network controller."
-              print "\t  This allows creating and managing ZeroTier networks locally."
-              print ""
-            }
-            {print}
-            ' "$ZEROTIER_DIR/Config.in" > "$ZEROTIER_DIR/Config.in.new"
-            mv "$ZEROTIER_DIR/Config.in.new" "$ZEROTIER_DIR/Config.in"
-            echo "Patched Config.in"
-          fi
-          
-          # Patch Makefile using awk
-          if ! grep -q "ZT_CONTROLLER=1" "$ZEROTIER_DIR/Makefile"; then
-            awk '
-            /^define Build\/Compile/ {
-              print "# Enable built-in network controller"
-              print "ifeq ($(CONFIG_ZEROTIER_ENABLE_CONTROLLER),y)"
-              print "MAKE_FLAGS += ZT_CONTROLLER=1"
-              print "endif"
-              print ""
-            }
-            {print}
-            ' "$ZEROTIER_DIR/Makefile" > "$ZEROTIER_DIR/Makefile.new"
-            mv "$ZEROTIER_DIR/Makefile.new" "$ZEROTIER_DIR/Makefile"
-            echo "Patched Makefile"
-          fi
-          
-          echo "=== Patched Config.in ==="
-          tail -15 "$ZEROTIER_DIR/Config.in"
-          echo "=== Patched Makefile (ZT_CONTROLLER section) ==="
-          grep -B2 -A5 "ZT_CONTROLLER" "$ZEROTIER_DIR/Makefile" || true
+          # 使用本仓库的 zerotier 包（已含控制器支持）
+          cp -r net/zerotier sdk/package/
+          echo "=== 使用本地 zerotier 包 ==="
+          head -30 sdk/package/zerotier/Makefile
 
       - name: Configure build
         if: steps.check.outputs.should_build == 'true'
         working-directory: sdk
         run: |
-          ./scripts/feeds install zerotier
+          # 更新 feeds 获取依赖 (libminiupnpc, libnatpmp 等)
+          ./scripts/feeds update packages
+          ./scripts/feeds install libminiupnpc libnatpmp
+          
           cat > .config << 'EOF'
           CONFIG_PACKAGE_zerotier=y
           CONFIG_ZEROTIER_ENABLE_CONTROLLER=y
@@ -163,7 +127,7 @@ jobs:
         working-directory: sdk
         run: |
           echo "Building zerotier with controller for ${{ matrix.arch }}..."
-          make package/feeds/packages/zerotier/compile V=s -j$(nproc) 2>&1 | tee build.log || make package/feeds/packages/zerotier/compile V=s -j1 2>&1 | tee -a build.log
+          make package/zerotier/compile V=s -j$(nproc) 2>&1 | tee build.log || make package/zerotier/compile V=s -j1 2>&1 | tee -a build.log
 
       - name: Collect artifacts
         if: steps.check.outputs.should_build == 'true'
