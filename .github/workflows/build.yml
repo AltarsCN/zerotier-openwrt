@@ -148,16 +148,13 @@ jobs:
           # Check that Build/Prepare patched make-linux.mk correctly
           if [ -d build_dir ]; then
             find build_dir -path "*/ZeroTierOne-*/make-linux.mk" -exec sh -c '
-              if grep -q "ZT_CONTROLLER_USE_LIBPQ" "$1"; then
-                echo "WARNING: ZT_CONTROLLER_USE_LIBPQ still present - patch may not have applied"
-              else
-                echo "OK: ZT_CONTROLLER_USE_LIBPQ removed (embedded controller will use FileDB)"
-              fi
-              if grep -q "libsmeeclient" "$1"; then
-                echo "WARNING: smeeclient references still present"
-              else
-                echo "OK: smeeclient references removed (no Rust/protoc needed)"
-              fi
+              for pat in ZT_CONTROLLER_USE_LIBPQ libsmeeclient ZT_OPENTELEMETRY_ENABLED; do
+                if grep -q "$pat" "$1"; then
+                  echo "WARNING: $pat still present - patch may not have applied"
+                else
+                  echo "OK: $pat removed"
+                fi
+              done
             ' _ {} \; 2>/dev/null || true
           fi
           

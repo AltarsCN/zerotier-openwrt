@@ -81,13 +81,16 @@ ifeq ($(CONFIG_ZEROTIER_ENABLE_CONTROLLER),y)
 	#    Without this define, CV1/CV2/CtlUtil compile to empty .o (all code is #ifdef-guarded).
 	#    EmbeddedNetworkController falls back to FileDB as storage backend.
 	sed -i 's/ *-DZT_CONTROLLER_USE_LIBPQ//' $(PKG_BUILD_DIR)/make-linux.mk
-	# 2. Remove libpqxx/hiredis/redis library linkage (unique pattern on these lines)
+	# 2. Remove ZT_OPENTELEMETRY_ENABLED (needs full OTEL SDK with exporters/gRPC,
+	#    but embedded builds only have the api-only headers)
+	sed -i 's/ *-DZT_OPENTELEMETRY_ENABLED[^ ]*//' $(PKG_BUILD_DIR)/make-linux.mk
+	# 3. Remove libpqxx/hiredis/redis library linkage (unique pattern on these lines)
 	sed -i '/libpqxx-7\.7\.3/d' $(PKG_BUILD_DIR)/make-linux.mk
-	# 3. Remove PostgreSQL include path
+	# 4. Remove PostgreSQL include path
 	sed -i '/\/usr\/include\/postgresql/d' $(PKG_BUILD_DIR)/make-linux.mk
-	# 4. Remove smeeclient.a library linking (both debug and release)
+	# 5. Remove smeeclient.a library linking (both debug and release)
 	sed -i '/libsmeeclient\.a/d' $(PKG_BUILD_DIR)/make-linux.mk
-	# 5. Replace smeeclient Rust/cargo build with no-op (embedded doesn't need Rust)
+	# 6. Replace smeeclient Rust/cargo build with no-op (embedded doesn't need Rust)
 	sed -i 's|export PATH.*cargo build.*smeeclient|@echo "Skipping smeeclient for embedded build"|' $(PKG_BUILD_DIR)/make-linux.mk
 	@echo ">>> Patch complete. Embedded controller uses FileDB (JSON file storage)."
 endif
