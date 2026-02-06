@@ -47,8 +47,8 @@ define Package/zerotier/config
 	source "$(SOURCE)/Config.in"
 endef
 
-# Make binary smaller
-TARGET_CFLAGS += -Wl,-z,noexecstack
+# Make binary smaller and more suitable for embedded routers
+TARGET_CFLAGS += -fvisibility=hidden -Wl,-z,noexecstack
 TARGET_LDFLAGS += -Wl,--as-needed -Wl,-z,noexecstack
 
 # Prevent `-isystem ext` from causing wrong miniupnpc header
@@ -92,6 +92,9 @@ ifeq ($(CONFIG_ZEROTIER_ENABLE_CONTROLLER),y)
 	sed -i '/libsmeeclient\.a/d' $(PKG_BUILD_DIR)/make-linux.mk
 	# 6. Replace smeeclient Rust/cargo build with no-op (embedded doesn't need Rust)
 	sed -i 's|export PATH.*cargo build.*smeeclient|@echo "Skipping smeeclient for embedded build"|' $(PKG_BUILD_DIR)/make-linux.mk
+	# 7. Remove empty controller objects (CV1/CV2/CtlUtil are all #ifdef ZT_CONTROLLER_USE_LIBPQ)
+	#    This saves compile time; gc-sections already removes them from binary.
+	sed -i 's/CV1\.o//;s/CV2\.o//;s/CtlUtil\.o//' $(PKG_BUILD_DIR)/objects-nonfree.mk
 	@echo ">>> Patch complete. Embedded controller uses FileDB (JSON file storage)."
 endif
 endef

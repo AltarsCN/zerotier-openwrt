@@ -3,7 +3,100 @@
 FW_PATH="/var/run/zerotier-one/_fw4"
 [ -d "$FW_PATH" ] || mkdir -p "$FW_PATH"
 
-while getopts "i:s" arg; do
+# Apply 1:1 NAT rules for zt_device entries
+# $1: ZeroTier interface name (e.g., zt4ajl3jde)
+apply_device_nat() {
+	local iface="$1"
+	[ -n "$iface" ] || return
+
+	# Clean existing device NAT rules for this interface
+	for chain in dstnat srcnat forward; do
+		nft -a list chain inet fw4 "$chain" 2>/dev/null | grep "zt_dev_" | while read line; do
+			handle="$(echo "$line" | grep -o 'handle [0-9]*' | awk '{print $2}')"
+			[ -n "$handle" ] && nft delete rule inet fw4 "$chain" handle "$handle" 2>/dev/null
+		done
+	done
+
+	# Remove old alias IPs (/32) from ZT interface
+	ip addr show dev "$iface" 2>/dev/null | grep "inet " | grep "/32" | awk '{print $2}' | while read cidr; do
+		ip addr del "$cidr" dev "$iface" 2>/dev/null
+	done
+
+	# Clear device tracking file
+	echo -n > "$FW_PATH/devices.nft" 2>/dev/null
+
+	# Process each zt_device section
+	local has_devices=0
+	local idx=0
+	while true; do
+		local section
+		section="$(uci -q get zerotier.@zt_device[$idx])"
+		[ -n "$section" ] || break
+
+		local enabled lan_ip zt_ip dev_name
+		enabled="$(uci -q get zerotier.@zt_device[$idx].enabled)"
+		lan_ip="$(uci -q get zerotier.@zt_device[$idx].ip)"
+		zt_ip="$(uci -q get zerotier.@zt_device[$idx].zt_ip)"
+		dev_name="$(uci -q get zerotier.@zt_device[$idx].name)"
+
+		idx=$((idx + 1))
+
+		[ "$enabled" = "1" ] || continue
+		[ -n "$lan_ip" ] && [ -n "$zt_ip" ] || continue
+
+		# Sanitize name for nft comment
+		dev_name="$(echo "$dev_name" | sed 's/[^a-zA-Z0-9_.-]/_/g')"
+		[ -n "$dev_name" ] || dev_name="$lan_ip"
+
+		has_devices=1
+
+		# Add alias IP to ZT interface
+		ip addr add "$zt_ip/32" dev "$iface" 2>/dev/null
+
+		# DNAT: traffic from ZT to virtual IP → forward to real LAN IP
+		nft insert rule inet fw4 dstnat iifname "$iface" ip daddr "$zt_ip" \
+			counter dnat to "$lan_ip" comment "\"zt_dev_dnat_$dev_name\""
+		echo "dstnat iifname $iface ip daddr $zt_ip dnat to $lan_ip # zt_dev_dnat_$dev_name" >> "$FW_PATH/devices.nft"
+
+		# SNAT: return traffic from LAN device → use virtual ZT IP as source
+		nft insert rule inet fw4 srcnat oifname "$iface" ip saddr "$lan_ip" \
+			counter snat to "$zt_ip" comment "\"zt_dev_snat_$dev_name\""
+		echo "srcnat oifname $iface ip saddr $lan_ip snat to $zt_ip # zt_dev_snat_$dev_name" >> "$FW_PATH/devices.nft"
+
+		# Forward: allow bidirectional traffic between ZT and LAN for this device
+		nft insert rule inet fw4 forward iifname "$iface" ip daddr "$lan_ip" \
+			oifname "br-lan" counter accept comment "\"zt_dev_fwd_in_$dev_name\""
+		nft insert rule inet fw4 forward iifname "br-lan" ip saddr "$lan_ip" \
+			oifname "$iface" counter accept comment "\"zt_dev_fwd_out_$dev_name\""
+		echo "forward $iface <-> br-lan $lan_ip # zt_dev_fwd_$dev_name" >> "$FW_PATH/devices.nft"
+
+		logger -t zerotier "1:1 NAT: $zt_ip <-> $lan_ip ($dev_name) on $iface"
+	done
+
+	# Enable activeBridge on controller if we have devices
+	if [ "$has_devices" = "1" ]; then
+		local token zt_addr nwid
+		token="$(cat /var/lib/zerotier-one/authtoken.secret 2>/dev/null)"
+		zt_addr="$(zerotier-cli info 2>/dev/null | awk '{print $3}')"
+		if [ -n "$token" ] && [ -n "$zt_addr" ]; then
+			# Find network ID for this interface
+			nwid="$(zerotier-cli -j listnetworks 2>/dev/null | jsonfilter -qe "@[@.portDeviceName=\"$iface\"].nwid")"
+			if [ -n "$nwid" ]; then
+				# Check if this node is the controller (nwid starts with zt_addr)
+				local controller_addr="${nwid:0:10}"
+				if [ "$controller_addr" = "$zt_addr" ]; then
+					# Self-hosted controller: set activeBridge directly
+					curl -s -X POST -H "X-ZT1-Auth: $token" \
+						-d '{"activeBridge":true}' \
+						"http://127.0.0.1:9993/controller/network/$nwid/member/$zt_addr" >/dev/null 2>&1
+					logger -t zerotier "Enabled activeBridge for $zt_addr on $nwid"
+				fi
+			fi
+		fi
+	fi
+}
+
+while getopts "i:sd" arg; do
 	case "$arg" in
 	i)
 		iface="$OPTARG"
@@ -67,10 +160,18 @@ while getopts "i:s" arg; do
 			nft insert rule inet fw4 "input meta l4proto { $network } th dport $pport counter accept comment \"!fw4: Accept ZeroTier input $pport ($pp)\""
 		done
 		;;
+	d)
+		# Apply 1:1 NAT for all enabled zt_device entries
+		# Find all active ZeroTier interfaces
+		for zt_iface in $(ip -o link show | awk -F': ' '/zt[a-z0-9]+/{print $2}'); do
+			apply_device_nat "$zt_iface"
+		done
+		;;
 	*)
-		echo "Usage: $0 -i <interface> | -s"
+		echo "Usage: $0 -i <interface> | -s | -d"
 		echo "  -i <interface> : Generate rules for the specified interface"
 		echo "  -s             : Generate rules for the zerotier service"
+		echo "  -d             : Apply 1:1 NAT rules for configured LAN devices"
 		exit 1
 		;;
 	esac
