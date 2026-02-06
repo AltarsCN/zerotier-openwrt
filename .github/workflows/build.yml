@@ -143,15 +143,44 @@ jobs:
         if: steps.check.outputs.should_build == 'true'
         working-directory: sdk
         run: |
-          echo "Building zerotier with controller for ${{ matrix.arch }}..."
-          make package/zerotier/compile V=s -j$(nproc) 2>&1 | tee build.log
-          BUILD_RESULT=$?
-          if [ $BUILD_RESULT -ne 0 ]; then
-            echo "=== Build failed, retrying with single thread ==="
-            make package/zerotier/compile V=s -j1 2>&1 | tee -a build.log
+          echo "Building zerotier with embedded controller for ${{ matrix.arch }}..."
+          echo "=== Verify embedded controller patch ==="
+          # Check that Build/Prepare patched make-linux.mk correctly
+          if [ -d build_dir ]; then
+            find build_dir -path "*/ZeroTierOne-*/make-linux.mk" -exec sh -c '
+              if grep -q "ZT_CONTROLLER_USE_LIBPQ" "$1"; then
+                echo "WARNING: ZT_CONTROLLER_USE_LIBPQ still present - patch may not have applied"
+              else
+                echo "OK: ZT_CONTROLLER_USE_LIBPQ removed (embedded controller will use FileDB)"
+              fi
+              if grep -q "libsmeeclient" "$1"; then
+                echo "WARNING: smeeclient references still present"
+              else
+                echo "OK: smeeclient references removed (no Rust/protoc needed)"
+              fi
+            ' _ {} \; 2>/dev/null || true
           fi
+          
+          echo "=== Starting build ==="
+          make package/zerotier/compile V=s -j$(nproc) 2>&1 | tee build.log
+          BUILD_RESULT=${PIPESTATUS[0]}
+          
+          if [ $BUILD_RESULT -ne 0 ]; then
+            echo "=== Build failed (exit $BUILD_RESULT), checking errors ==="
+            tail -100 build.log | grep -i "error\|fatal\|failed" || true
+            echo "=== Retrying with single thread ==="
+            make package/zerotier/compile V=s -j1 2>&1 | tee -a build.log
+            BUILD_RESULT=${PIPESTATUS[0]}
+          fi
+          
+          echo "=== Build result: $BUILD_RESULT ==="
           echo "=== Searching for built packages ==="
           find bin/ -type f \( -name "*.ipk" -o -name "*.apk" \) 2>/dev/null | head -20
+          
+          if [ $BUILD_RESULT -ne 0 ]; then
+            echo "::error::Package build failed for ${{ matrix.arch }}"
+            exit 1
+          fi
 
       - name: Collect artifacts
         if: steps.check.outputs.should_build == 'true'
@@ -236,9 +265,16 @@ jobs:
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
           body: |
-            ## ZeroTier with Built-in Controller
+            ## ZeroTier with Built-in Embedded Controller
             
             Pre-built packages with `ZT_CONTROLLER=1` enabled.
+            The embedded controller uses **FileDB** (JSON file storage) — no PostgreSQL, Redis, or Rust required.
+            
+            ### Features
+            - Self-hosted ZeroTier network controller on your router
+            - Create and manage networks via REST API (`http://<router>:9993/controller/`)
+            - Compatible with ZTNCUI / Zero-UI web management interfaces
+            - Network/member configs stored as JSON files in `/var/lib/zerotier-one/controller.d/`
             
             ### Supported Platforms
             - `x86_64` - 软路由/虚拟机

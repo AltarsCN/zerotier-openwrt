@@ -39,6 +39,8 @@ endef
 define Package/zerotier/description
   ZeroTier creates a global provider-independent virtual private cloud network.
   This package includes built-in network controller support (ZT_CONTROLLER=1).
+  The embedded controller uses file-based storage (FileDB) and does not require
+  PostgreSQL, Redis, or Rust. Network/member configs are stored as JSON files.
 endef
 
 define Package/zerotier/config
@@ -59,14 +61,37 @@ endif
 MAKE_FLAGS += \
 	ZT_EMBEDDED=1 \
 	ZT_SSO_SUPPORTED=0 \
-	ZT_NONFREE=0 \
 	DEFS="" \
 	OSTYPE="Linux"
 
-# Enable controller support
+# Controller support: ZT_NONFREE=1 is required to compile nonfree/controller/ objects.
+# Without ZT_CONTROLLER_USE_LIBPQ (removed by Build/Prepare patch), the controller
+# uses FileDB (file-based JSON storage) instead of PostgreSQL/Redis.
 ifeq ($(CONFIG_ZEROTIER_ENABLE_CONTROLLER),y)
-MAKE_FLAGS += ZT_CONTROLLER=1
+MAKE_FLAGS += ZT_CONTROLLER=1 ZT_NONFREE=1
+else
+MAKE_FLAGS += ZT_NONFREE=0
 endif
+
+define Build/Prepare
+	$(call Build/Prepare/Default)
+ifeq ($(CONFIG_ZEROTIER_ENABLE_CONTROLLER),y)
+	@echo ">>> Patching make-linux.mk for embedded controller (FileDB, no PQ/Redis/SMEE)"
+	# 1. Remove ZT_CONTROLLER_USE_LIBPQ define (keeps -DZT_NO_PEER_METRICS etc.)
+	#    Without this define, CV1/CV2/CtlUtil compile to empty .o (all code is #ifdef-guarded).
+	#    EmbeddedNetworkController falls back to FileDB as storage backend.
+	sed -i 's/ *-DZT_CONTROLLER_USE_LIBPQ//' $(PKG_BUILD_DIR)/make-linux.mk
+	# 2. Remove libpqxx/hiredis/redis library linkage (unique pattern on these lines)
+	sed -i '/libpqxx-7\.7\.3/d' $(PKG_BUILD_DIR)/make-linux.mk
+	# 3. Remove PostgreSQL include path
+	sed -i '/\/usr\/include\/postgresql/d' $(PKG_BUILD_DIR)/make-linux.mk
+	# 4. Remove smeeclient.a library linking (both debug and release)
+	sed -i '/libsmeeclient\.a/d' $(PKG_BUILD_DIR)/make-linux.mk
+	# 5. Replace smeeclient Rust/cargo build with no-op (embedded doesn't need Rust)
+	sed -i 's|export PATH.*cargo build.*smeeclient|@echo "Skipping smeeclient for embedded build"|' $(PKG_BUILD_DIR)/make-linux.mk
+	@echo ">>> Patch complete. Embedded controller uses FileDB (JSON file storage)."
+endif
+endef
 
 define Build/Compile
 	$(call Build/Compile/Default,one)
