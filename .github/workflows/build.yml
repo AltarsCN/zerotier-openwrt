@@ -81,13 +81,17 @@ jobs:
         if: steps.check.outputs.should_build == 'true'
         run: |
           echo "Downloading SDK for ${{ matrix.arch }} from ${{ matrix.sdk_url }}"
-          SDK_FILE=$(curl -sL "${{ matrix.sdk_url }}" | grep -oE '${{ matrix.sdk_pattern }}[^"]+\.tar\.zst' | head -1)
+          # Fetch page content and join lines to handle line breaks in HTML
+          PAGE_CONTENT=$(curl -sL "${{ matrix.sdk_url }}" | tr -d '\n')
+          SDK_FILE=$(echo "$PAGE_CONTENT" | grep -oE '${{ matrix.sdk_pattern }}[^"]+\.tar\.zst' | head -1)
           if [ -z "$SDK_FILE" ]; then
-            SDK_FILE=$(curl -sL "${{ matrix.sdk_url }}" | grep -oE '${{ matrix.sdk_pattern }}[^"]+\.tar\.xz' | head -1)
+            SDK_FILE=$(echo "$PAGE_CONTENT" | grep -oE '${{ matrix.sdk_pattern }}[^"]+\.tar\.xz' | head -1)
           fi
           echo "Found SDK: $SDK_FILE"
           if [ -z "$SDK_FILE" ]; then
             echo "ERROR: Could not find SDK for ${{ matrix.arch }}"
+            echo "=== Debug: Page content (first 5000 chars) ==="
+            echo "$PAGE_CONTENT" | head -c 5000
             exit 1
           fi
           wget -q --show-progress "${{ matrix.sdk_url }}${SDK_FILE}" -O sdk_archive
