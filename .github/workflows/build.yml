@@ -25,6 +25,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -197,7 +200,7 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
+    if: (startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true') && !cancelled()
     
     steps:
       - name: Get current date
@@ -211,12 +214,20 @@ jobs:
           pattern: zerotier-controller-*
           merge-multiple: true
 
-      - name: List packages
+      - name: Check and list packages
+        id: check
         run: |
           echo "=== Release packages ==="
-          ls -la packages/ || echo "No packages"
+          if [ -d packages ] && [ "$(ls -A packages 2>/dev/null)" ]; then
+            ls -la packages/
+            echo "has_files=true" >> $GITHUB_OUTPUT
+          else
+            echo "No packages found"
+            echo "has_files=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create Release
+        if: steps.check.outputs.has_files == 'true'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', steps.date.outputs.date) }}
